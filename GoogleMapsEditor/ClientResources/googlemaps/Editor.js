@@ -67,7 +67,7 @@ function (
         isValid: function () {
 
             if (this.required) { // Making use of _ValueRequiredMixin to check if a property value is required
-                return this.hasCoordinates();
+                return this._hasCoordinates();
             }
 
             return true;

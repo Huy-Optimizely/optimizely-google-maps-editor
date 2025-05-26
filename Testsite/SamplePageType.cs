@@ -1,10 +1,10 @@
-﻿using EPiServer.Cms.Shell.UI.ObjectEditing.EditorDescriptors;
+﻿using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations;
+using EPiServer.Cms.Shell.UI.ObjectEditing.EditorDescriptors;
 using EPiServer.Core;
 using EPiServer.DataAnnotations;
 using EPiServer.Shell.ObjectEditing;
 using GoogleMapsEditor;
-using System.Collections.Generic;
-using System.ComponentModel.DataAnnotations;
 
 namespace Testsite;
 
@@ -16,7 +16,8 @@ public class SamplePageType : PageData
 
     public virtual GoogleMapsCoordinates? BlockCoordinates { get; set; }
 
-    [Display(GroupName = "Different tab")]
+    [Display(GroupName = "Different tab", Description = "Required coordinates.")]
+    [Required]
     [UIHint(GoogleMapsEditorDescriptor.UIHint)]
     public virtual string? MoreStringCoordinates { get; set; }
 
