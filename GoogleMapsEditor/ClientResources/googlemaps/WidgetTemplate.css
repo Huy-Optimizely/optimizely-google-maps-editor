@@ -47,13 +47,3 @@
 .dijitDialogPaneContentArea .google-maps-editor .dijitTextBox { width: 100% }
 .dijitDialogPaneContentArea .google-maps-editor-tools a.google-maps-editor-map-help { top: 5px; }
 .dijitDialogPaneContentArea .google-maps-editor-tools a.google-maps-editor-map-clear { top: 9.5px }
-
-.dijitDialogPaneContentArea .google-maps-editor-tools gmp-place-autocomplete {
-    width: 100% !important;
-}
-
-.dijitDialogPaneContentArea .google-maps-editor-tools gmp-place-autocomplete input {
-    height: 30px !important;
-    min-height: 30px !important;
-    padding: 4px 70px 4px 8px !important;
-}
