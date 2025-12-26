@@ -323,11 +323,13 @@ function (
         _addGoogleMapsScript: function () {
             const callbackFunctionName = "googleMapsScriptCallback";
 
+            // Create global editor object if one doesn't already exist, including global event for when Google Maps script has finished loading
             if (!window.googleMapsEditor) {
                 window.googleMapsEditor = {};
                 window.googleMapsEditor.scriptLoadedEvent = new Event("googleMapsScriptLoaded");
             }
 
+            // Add global callback function for Google Maps to invoke when script has loaded
             if (!window[callbackFunctionName]) {
                 window[callbackFunctionName] = function () {
                     this.log("Google Maps API loaded successfully");
@@ -351,7 +353,7 @@ function (
                 const firstScriptTag = document.getElementsByTagName("script")[0];
                 firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
             }
-            else if (typeof google === "object" && typeof google.maps === "object") {
+            else if (typeof google === "object" && typeof google.maps === "object") { // Script already loaded, for example when page is refreshed within the CMS UI
                 window[callbackFunctionName]();
             }
         },
@@ -363,6 +365,7 @@ function (
         _createGoogleMapsElement: async function () {
             const initialCoordinates = new google.maps.LatLng(this.defaultCoordinates.latitude, this.defaultCoordinates.longitude);
 
+            // Render the map, but disable interaction if property is readonly
             const mapOptions = {
                 zoom: parseInt(this.defaultZoom),
                 disableDefaultUI: true,
@@ -375,6 +378,7 @@ function (
 
             this._map = new google.maps.Map(this.canvas, mapOptions);
 
+            // Display grayscale map if property is readonly
             if (this.readOnly) {
                 const grayStyle = [{
                     featureType: "all",
@@ -387,7 +391,9 @@ function (
                 this._map.setMapTypeId('disabled');
             }
 
+            // Allow user to change coordinates unless property is readonly
             if (!this.readOnly) {
+                // Update map marker when map is right-clicked
                 const rightClickHandler = google.maps.event.addListener(this._map, "rightclick", function (event) {
                     this._setMapLocation(event.latLng, null, false, false);
                     this._setCoordinatesValue(event.latLng);
@@ -534,8 +540,6 @@ function (
             }
         },
 
-        
-
         /**
          * Gets or loads the Places library (cached)
          * Prevents repeated importLibrary calls
@@ -592,8 +596,8 @@ function (
         },
 
         /**
-         * Sets up custom autocomplete functionality with keyboard navigation
-         * Debounces input, handles arrow keys, enter, and escape
+         * Sets up custom autocomplete functionality
+         * Debounces input
          * @private
          */
         _setupCustomAutocomplete: function () {
@@ -652,13 +656,14 @@ function (
 
             if (!location) {
                 if (this._isComplexType()) {
+                    // Set "empty" value (still an object for local block properties)
                     value = {
                         "latitude": null,
                         "longitude": null
                     };
                 }
             }
-            else {
+            else { // Has a location
                 const longitude = location.lng(),
                       latitude = location.lat();
 
@@ -702,10 +707,12 @@ function (
                 this._marker.position = location;
             }
 
+            // Center on the location (optional)
             if (center) {
                 this._map.setCenter(location);
             }
 
+            // Set map zoom level (optional)
             if (zoom) {
                 this._map.setZoom(zoom);
             }
@@ -718,12 +725,15 @@ function (
          */
         _refreshMarkerLocation: function () {
             if (!this._map) {
+                // Map not initialized;
                 return;
             }
 
             let location;
 
+            // If the value set is empty then clear the coordinates
             if (!this._hasCoordinates()) {
+                // Set map location to default coordinates
                 location = new google.maps.LatLng(this.defaultCoordinates.latitude, this.defaultCoordinates.longitude);
                 this._setMapLocation(location, null, true, true);
                 return;
