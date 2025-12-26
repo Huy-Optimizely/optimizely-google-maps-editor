@@ -14,6 +14,10 @@ public static class ServiceCollectionExtensions
     /// Gets or sets the API key to use for Google Maps.
     /// </summary>
     public static string ApiKey { get; set; }
+    /// <summary>
+    /// Gets or sets the Map Id to use for Google Maps.
+    /// </summary>
+    public static string MapId { get; set; }
 
     public static int DefaultZoom { get; set; }
 
@@ -27,13 +31,15 @@ public static class ServiceCollectionExtensions
     /// Enables the Google Maps Editor.
     /// </summary>
     /// <param name="apiKey">Google Maps API key</param>
+    /// <param name="mapId">Google Maps - Map ID</param>
     /// <param name="defaultZoom">Default zoom level from 1 (least) to 20 (most).</param>
     /// <param name="defaultLongitude">Default longitude coordinate when no property value is set.</param>
     /// <param name="defaultLatitude">Default latitude coordinate when no property value is set.</param>
     /// <param name="services"></param>
-    public static IServiceCollection AddGoogleMapsEditor(this IServiceCollection services, string apiKey, int defaultZoom = 5, double defaultLatitude = 59.33564361359625, double defaultLongitude = 18.03014159202576)
+    public static IServiceCollection AddGoogleMapsEditor(this IServiceCollection services, string apiKey, string mapId, int defaultZoom = 5, double defaultLatitude = 59.33564361359625, double defaultLongitude = 18.03014159202576)
     {
         ApiKey = apiKey;
+        MapId = mapId;
         DefaultZoom = defaultZoom;
         DefaultLongitude = defaultLongitude;
         DefaultLatitude = defaultLatitude;

@@ -13,6 +13,8 @@ public class GoogleMapsEditorDescriptor : EditorDescriptor
 
     public virtual string ApiKey { get; set; } = ServiceCollectionExtensions.ApiKey;
 
+    public virtual string MapId { get; set; } = ServiceCollectionExtensions.MapId;
+
     public virtual int DefaultZoom { get; set; } = ServiceCollectionExtensions.DefaultZoom;
 
     public virtual double DefaultLatitude { get; set; } = ServiceCollectionExtensions.DefaultLatitude;
@@ -25,6 +27,9 @@ public class GoogleMapsEditorDescriptor : EditorDescriptor
 
         // API key for the Google Maps JavaScript API
         metadata.EditorConfiguration.Add("apiKey", ApiKey);
+
+        // Map Id for the Google Maps JavaScript API
+        metadata.EditorConfiguration.Add("mapId", MapId);
 
         // Default zoom level from 1 (least) to 20 (most)
         // https://developers.google.com/maps/documentation/javascript/tutorial#zoom-levels

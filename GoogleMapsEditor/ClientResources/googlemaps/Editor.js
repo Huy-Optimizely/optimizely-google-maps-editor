@@ -1,6 +1,29 @@
-﻿define([
+/**
+ * Google Maps Editor Widget for Optimizely CMS
+ * 
+ * A custom property editor that allows users to select and manage geographic coordinates
+ * using Google Maps and the Places API.
+ * 
+ * Features:
+ * - Interactive Google Maps display with marker placement
+ * - Place autocomplete search with custom suggestions dropdown
+ * - Right-click on map to set coordinates
+ * - Support for both object (latitude/longitude) and string (lat,lng) coordinate formats
+ * - Session token optimization for Places API calls
+ * - Full cleanup on widget destruction
+ * 
+ * Dependencies:
+ * - Google Maps JavaScript API v=weekly with places library
+ * - Dojo framework (dijit, dojo/on, dojo/keys, etc.)
+ * - Optimizely CMS (epi/shell/widget/dialog/LightWeight)
+ */
+define([
     "dojo/on",
     "dojo/_base/declare", // Used to declare the actual widget
+    "dojo/keys",
+    "dojo/dom-construct",
+    "dojo/dom-class",
+    "dojo/dom-style",
 
     "dijit/_TemplatedMixin", // Widgets will be based on an external template (string literal, external file, or URL request)
     "dijit/_WidgetsInTemplateMixin", // The widget will in itself contain additional widgets
@@ -15,6 +38,10 @@
 function (
     on,
     declare,
+    keys,
+    domConstruct,
+    domClass,
+    domStyle,
     _TemplatedMixin,
     _WidgetsInTemplateMixin,
     _FormValueWidget,
@@ -24,70 +51,162 @@ function (
 ) {
     return declare([_FormValueWidget, _TemplatedMixin, _WidgetsInTemplateMixin], {
 
-        // Property settings (set by editor descriptor and passed through constructor)
-        apiKey: null, // API key valid for Google Maps JavaScript API and Places API
-        defaultZoom: null, // Default zoom level, value between 1 and 20
-        defaultCoordinates: null, // Coordinates to center the map on when property value is not set
+        // ==================== Configuration Properties ====================
+        
+        /**
+         * Google Maps API key
+         * @type {string}
+         */
+        apiKey: null,
 
-        // The Google Maps object of this widget instance
+        /**
+         * Google Maps style ID for custom map styling
+         * @type {string}
+         */
+        mapId: null,
+
+        /**
+         * Default zoom level when map initializes (1-20)
+         * @type {number}
+         */
+        defaultZoom: null,
+
+        /**
+         * Default center coordinates for initial map view
+         * @type {{latitude: number, longitude: number}}
+         */
+        defaultCoordinates: null,
+
+        // ==================== Instance Properties ====================
+
+        /**
+         * Cached Places library exports (AutocompleteSessionToken, AutocompleteSuggestion)
+         * @type {Object}
+         * @private
+         */
+        _placesLibrary: null,
+
+        /**
+         * Google Maps instance
+         * @type {google.maps.Map}
+         * @private
+         */
         _map: null,
 
-        // The map marker of this widget instance
+        /**
+         * Map marker instance (AdvancedMarkerElement)
+         * @type {google.maps.marker.AdvancedMarkerElement}
+         * @private
+         */
         _marker: null,
 
-        // Localizations able to be accessed from the template
+        /**
+         * Session token for Places API autocomplete requests
+         * Reused across multiple requests in same session, reset after place selection
+         * @type {google.maps.places.AutocompleteSessionToken}
+         * @private
+         */
+        _sessionToken: null,
+
+        /**
+         * Array of autocomplete suggestions from last search
+         * @type {Array}
+         * @private
+         */
+        _suggestions: null,
+
+        /**
+         * DOM element for suggestions dropdown list
+         * @type {HTMLUListElement}
+         * @private
+         */
+        _suggestionsDropdown: null,
+
+        /**
+         * Index of currently highlighted suggestion (-1 = none)
+         * @type {number}
+         * @private
+         */
+        _selectedSuggestionIndex: -1,
+
+        /**
+         * Timer ID for debounced autocomplete search
+         * @type {number}
+         * @private
+         */
+        _typingTimer: null,
+
+        /**
+         * Localized labels and messages
+         * @type {Object}
+         * @private
+         */
         _localized: Labels,
 
-        // Help dialog displayed when clicking the question mark icon
+        /**
+         * Help dialog instance
+         * @type {epi/shell/widget/dialog/LightWeight}
+         * @private
+         */
         _helpDialog: null,
 
+        /**
+         * Prefix for console log messages
+         * @type {string}
+         * @private
+         */
         _logPrefix: "[GoogleMapsEditor]",
 
+        /**
+         * HTML template string
+         * @type {string}
+         */
         templateString: template,
 
-        _setValueAttr: function (/*anything*/ newValue, /*Boolean?*/ priorityChange) {
-            this.inherited(arguments);
+        // ==================== Public Methods ====================
 
+        /**
+         * Sets the widget value and refreshes marker location on map.
+         * Handles both object format {latitude, longitude} and string format "lat,lng"
+         * @param {*} newValue - The new coordinate value
+         * @param {boolean} [priorityChange] - Priority change flag (Dojo)
+         */
+        _setValueAttr: function (newValue, priorityChange) {
+            this.inherited(arguments);
             this.textbox.value = newValue || "";
 
-            if (this._marker == null) // Initial load
-            {
+            if (this._marker == null) {
                 this._refreshMarkerLocation();
             }
 
             if (this._isComplexType()) {
-                this.onChange(newValue); // Otherwise onChange won't trigger correctly for complex property types
+                this.onChange(newValue);
             }
         },
 
         /**
-         * Checks if the current property value is valid (invoked by Optimizely).
-         * @returns
+         * Validates the property value (invoked by Optimizely)
+         * Required properties must have valid coordinates
+         * @returns {boolean} True if valid, false otherwise
          */
         isValid: function () {
-
-            if (this.required) { // Making use of _ValueRequiredMixin to check if a property value is required
+            if (this.required) {
                 return this._hasCoordinates();
             }
-
             return true;
         },
 
         /**
-         * Determines if the property is complex type, i.e. local block with separate properties for longitude and latitude, as opposed to a simple string property.
-         * @param {any} value
-         * @returns
+         * Determines if the property is complex type (object with latitude/longitude)
+         * vs simple string type (comma-separated coordinates)
+         * @param {*} [value] - Optional value to check (uses this.value if not provided)
+         * @returns {boolean} True if complex type, false if simple string type
          */
         _isComplexType: function (value) {
+            let valueToCheck = value || this.value;
 
-            let valueToCheck = value;
-
-            if (!valueToCheck) {
-                valueToCheck = this.value;
-            }
-
-            if (valueToCheck) {
-                return typeof valueToCheck === "object";
+            if (valueToCheck && typeof valueToCheck === "object") {
+                return true;
             }
 
             if (Array.isArray(this.properties)) {
@@ -102,14 +221,11 @@ function (
         },
 
         /**
-         * Checks if the current value is valid coordinates.
-         * @returns
+         * Checks if current value has valid coordinates
+         * @returns {boolean} True if coordinates are valid and non-zero
          */
         _hasCoordinates: function () {
-
-            if (!this.value) {
-                return false;
-            }
+            if (!this.value) return false;
 
             if (this._isComplexType()) {
                 return typeof this.value.latitude !== "undefined" &&
@@ -120,43 +236,37 @@ function (
                     !isNaN(this.value.latitude) &&
                     this.value.longitude !== 0 &&
                     this.value.latitude !== 0;
-
             }
             else if (typeof this.value === "string") {
-                return this.value.split(',').length == 2; // String value with comma-separated coordinates
+                return this.value.split(',').length == 2;
             }
 
             return false;
         },
 
         /**
-         * Clears the coordinates, i.e. the property value.
+         * Clears coordinates, marker, and suggestions dropdown
          */
         _clearCoordinates: function () {
-
-            // Clear search box
             this.searchTextbox.set("value", '');
+            this._hideSuggestionsDropdown();
 
-            // Remove the map marker, if any
             if (this._marker) {
-                this._marker.setMap(null);
+                this._marker.map = null;
                 this._marker = null;
             }
 
-            // Clear the property value
             this._setCoordinatesValue(null);
         },
 
         /**
-         * Wires up event handlers for UI elements, such as the "Clear coordinates" icon.
+         * Wires up event handlers for help and clear icons
          */
         _wireupIcons: function () {
-            // Display help when help icon is clicked
-            on(this.helpIcon, "click", function (e) {
+            const helpHandler = on(this.helpIcon, "click", function (e) {
                 e.preventDefault();
 
                 if (!this._helpDialog) {
-
                     this._helpDialog = new LightWeight({
                         style: "width: 540px",
                         closeIconVisible: true,
@@ -165,7 +275,6 @@ function (
                             this._helpDialog.hide();
                         }.bind(this),
                         _endDrag: function () {
-                            // HACK Avoid CMS bug, "Cannot read property 'userSetTransformId' of null" when close icon is clicked
                         }.bind(this),
                         title: this._localized.help.dialogTitle,
                         content: this._localized.help.dialogHtml
@@ -179,106 +288,94 @@ function (
                 }
             }.bind(this));
 
-            // Clear coordinates when icon is clicked
-            on(this.clearIcon, "click", function (e) {
+            const clearHandler = on(this.clearIcon, "click", function (e) {
                 this._clearCoordinates();
             }.bind(this));
+
+            this.own(helpHandler, clearHandler);
         },
 
         /**
-         * Logs a message to console locally.
-         * @param {any} message
-         * @param {any} data
-         * @returns
+         * Logs a message to console (only on localhost for debugging)
+         * @param {string} message - Message to log
+         * @param {*} [data] - Optional data to include in log
          */
         log: function (message, data) {
-            if (!window.location.hostname === "localhost" && !window.location.hostname.endsWith(".local")) {
+            if (window.location.hostname !== "localhost" && !window.location.hostname.endsWith(".local")) {
                 return;
             }
 
             const messageWithPrefix = `${this._logPrefix} ${message}`;
-
             if (data) {
                 console.log(messageWithPrefix, data);
-            }
-            else {
+            } else {
                 console.log(messageWithPrefix);
             }
         },
 
+        // ==================== Google Maps Initialization ====================
+
         /**
-         * Add Google Maps script unless already loaded.
-         * @returns True if script was added, false if ignored because script had already been added.
+         * Loads the Google Maps JavaScript API script
+         * Uses global callback to notify when script is loaded
+         * Prevents duplicate script tags from being created
          */
         _addGoogleMapsScript: function () {
-
             const callbackFunctionName = "googleMapsScriptCallback";
 
-            // Create global editor object if one doesn't already exist, including global event for when Google Maps script has finished loading
             if (!window.googleMapsEditor) {
                 window.googleMapsEditor = {};
-
                 window.googleMapsEditor.scriptLoadedEvent = new Event("googleMapsScriptLoaded");
             }
 
-            // Add global callback function for Google Maps to invoke when script has loaded
             if (!window[callbackFunctionName]) {
-
                 window[callbackFunctionName] = function () {
-                    this.log("Google Maps loaded", {
-                        google: google
-                    });
-
+                    this.log("Google Maps API loaded successfully");
                     document.dispatchEvent(googleMapsEditor.scriptLoadedEvent);
-
                 }.bind(this);
             }
 
             const googleMapsScriptElementId = "googleMapsEditor-script";
-
             const scriptTagAlreadyAdded = !!document.getElementById(googleMapsScriptElementId);
 
             if (!scriptTagAlreadyAdded) {
-                const scriptUrl = `https://maps.googleapis.com/maps/api/js?key=${this.apiKey}&loading=async&libraries=places&callback=${callbackFunctionName}`;
+                const scriptUrl = `https://maps.googleapis.com/maps/api/js?key=${this.apiKey}&loading=async&libraries=places,marker&callback=${callbackFunctionName}&v=weekly`;
 
                 this.log("Loading Google Maps script...", scriptUrl);
                                 
                 const tag = document.createElement("script");
-                tag.id = googleMapsScriptElementId,
+                tag.id = googleMapsScriptElementId;
                 tag.src = scriptUrl;
                 tag.defer = true;
 
                 const firstScriptTag = document.getElementsByTagName("script")[0];
                 firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
             }
-            else if (typeof google === "object" && typeof google.maps === "object") { // Script already loaded, for example when page is refreshed within the CMS UI
+            else if (typeof google === "object" && typeof google.maps === "object") {
                 window[callbackFunctionName]();
             }
         },
 
         /**
-         * Initializes the Google Maps DOM element.
+         * Initializes the Google Map and sets up all event listeners
+         * Called after Google Maps API script has loaded
          */
-        _createGoogleMapsElement: function () {
-
+        _createGoogleMapsElement: async function () {
             const initialCoordinates = new google.maps.LatLng(this.defaultCoordinates.latitude, this.defaultCoordinates.longitude);
 
-            // Render the map, but disable interaction if property is readonly
             const mapOptions = {
                 zoom: parseInt(this.defaultZoom),
                 disableDefaultUI: true,
                 center: initialCoordinates,
                 disableDoubleClickZoom: this.readOnly,
                 scrollwheel: !this.readOnly,
-                draggable: !this.readOnly
+                draggable: !this.readOnly,
+                mapId: `${this.mapId}`
             };
 
-            // Load the map
             this._map = new google.maps.Map(this.canvas, mapOptions);
 
-            // Display grayscale map if property is readonly
             if (this.readOnly) {
-
                 const grayStyle = [{
                     featureType: "all",
                     elementType: "all",
@@ -286,53 +383,267 @@ function (
                 }];
 
                 const mapType = new google.maps.StyledMapType(grayStyle, { name: "Grayscale" });
-
                 this._map.mapTypes.set('disabled', mapType);
-
                 this._map.setMapTypeId('disabled');
             }
 
-            // Allow user to change coordinates unless property is readonly
             if (!this.readOnly) {
-
-                // Update map marker when map is right-clicked
-                google.maps.event.addListener(this._map, "rightclick", function (event) {
+                const rightClickHandler = google.maps.event.addListener(this._map, "rightclick", function (event) {
                     this._setMapLocation(event.latLng, null, false, false);
-
                     this._setCoordinatesValue(event.latLng);
                 }.bind(this));
 
-                // Add search textbox and when a place is selected, move pin and center map
-                const searchBox = new google.maps.places.SearchBox(this.searchTextbox.textbox);
-
-                // Remove Google Maps Searchbox default placeholder, as it won't recognize the placeholder attribute placed on the Textbox dijit
-                this.searchTextbox.textbox.setAttribute('placeholder', '');
-
-                google.maps.event.addListener(searchBox, 'places_changed', function () {
-                    const places = searchBox.getPlaces();
-
-                    if (places.length == 0) {
-                        return;
+                this.own({
+                    remove: function () {
+                        google.maps.event.removeListener(rightClickHandler);
                     }
-                    // Return focus to the textbox to ensure autosave works correctly and to also give a nice editor experience
-                    this.searchTextbox.focus();
-                    const location = places[0].geometry.location;
-                    this._setMapLocation(location, 15, true);
-                    this._setCoordinatesValue(location);
-                }.bind(this));
+                });
+
+                this._setupCustomAutocomplete();
             } else {
-                // Disable search box and clear button
                 this.searchTextbox.set("disabled", true);
             }
         },
 
+        // ==================== Autocomplete & Suggestions ====================
+
         /**
-         * Sets the widget value, in either string or object format depending on underlying property type, to the specified location.
-         * @param {google.maps.LatLng} location
-         * @returns
+         * Creates the suggestions dropdown element if it doesn't exist
+         * @private
+         */
+        _createSuggestionsDropdown: function () {
+            if (this._suggestionsDropdown) return;
+
+            this._suggestionsDropdown = domConstruct.create("ul", {
+                class: "google-maps-suggestions-dropdown",
+                style: "display: none;"
+            });
+
+            domConstruct.place(this._suggestionsDropdown, this.searchTextbox.domNode.parentNode, "last");
+        },
+
+        /**
+         * Displays suggestions dropdown with list of places from autocomplete
+         * @param {Array} suggestions - Array of autocomplete suggestions
+         * @private
+         */
+        _showSuggestionsDropdown: function (suggestions) {
+            if (!this._suggestionsDropdown) {
+                this._createSuggestionsDropdown();
+            }
+
+            domConstruct.empty(this._suggestionsDropdown);
+            this._selectedSuggestionIndex = -1;
+
+            if (!suggestions || suggestions.length === 0) {
+                this._hideSuggestionsDropdown();
+                return;
+            }
+
+            suggestions.forEach((suggestion, index) => {
+                const placePrediction = suggestion.placePrediction;
+                const li = domConstruct.create("li", {
+                    class: "suggestion-item",
+                    "data-index": index,
+                    innerHTML: placePrediction.text.toString()
+                }, this._suggestionsDropdown);
+
+                li.addEventListener("click", function (e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    this._selectSuggestion(index);
+                }.bind(this));
+
+                li.addEventListener("mouseenter", function () {
+                    this._highlightSuggestion(index);
+                }.bind(this));
+            });
+
+            domStyle.set(this._suggestionsDropdown, "display", "block");
+        },
+
+        /**
+         * Hides the suggestions dropdown
+         * @private
+         */
+        _hideSuggestionsDropdown: function () {
+            if (this._suggestionsDropdown) {
+                domStyle.set(this._suggestionsDropdown, "display", "none");
+            }
+            this._selectedSuggestionIndex = -1;
+        },
+
+        /**
+         * Highlights a suggestion item by index
+         * @param {number} index - Index of suggestion to highlight
+         * @private
+         */
+        _highlightSuggestion: function (index) {
+            if (!this._suggestionsDropdown) return;
+            
+            const items = this._suggestionsDropdown.querySelectorAll(".suggestion-item");
+            items.forEach((item, i) => {
+                if (i === index) {
+                    domClass.add(item, "selected");
+                } else {
+                    domClass.remove(item, "selected");
+                }
+            });
+            this._selectedSuggestionIndex = index;
+        },
+
+        /**
+         * Handles selection of a suggestion
+         * Fetches full place details and updates map and coordinates
+         * @param {number} index - Index of suggestion to select
+         * @private
+         */
+        _selectSuggestion: async function (index) {
+            if (!this._suggestions || index < 0 || index >= this._suggestions.length) {
+                return;
+            }
+
+            const suggestion = this._suggestions[index];
+            const placePrediction = suggestion.placePrediction;
+
+            try {
+                const place = placePrediction.toPlace();
+                await place.fetchFields({
+                    fields: ['displayName', 'formattedAddress', 'location']
+                });
+
+                if (!place.location) {
+                    return;
+                }
+
+                const lat = place.location.lat();
+                const lng = place.location.lng();
+                const location = new google.maps.LatLng(lat, lng);
+
+                this._setMapLocation(location, 15, true, false);
+                this._setCoordinatesValue(location);
+
+                // Keep session token for cost optimization across multiple selections
+                // Session token will be reused until user clears the search field
+
+                this.searchTextbox.set("value", '');
+                this._hideSuggestionsDropdown();
+
+            } catch (error) {
+                console.error(`${this._logPrefix} Error selecting place:`, error);
+            }
+        },
+
+        
+
+        /**
+         * Gets or loads the Places library (cached)
+         * Prevents repeated importLibrary calls
+         * @returns {Promise<Object>} Object containing AutocompleteSessionToken and AutocompleteSuggestion
+         * @private
+         */
+        _getPlacesLibrary: async function () {
+            if (this._placesLibrary) {
+                return this._placesLibrary;
+            }
+
+            this._placesLibrary = await google.maps.importLibrary('places');
+            return this._placesLibrary;
+        },
+
+        /**
+         * Fetches autocomplete suggestions from Places API
+         * Uses session token for cost optimization
+         * @param {string} input - User input for autocomplete search
+         * @private
+         */
+        _fetchAutocompleteSuggestions: async function (input) {
+            if (!input || input.length < 1) {
+                this._hideSuggestionsDropdown();
+                return;
+            }
+
+            try {
+                const placesLib = await this._getPlacesLibrary();
+                const { AutocompleteSessionToken, AutocompleteSuggestion } = placesLib;
+
+                if (!this._sessionToken) {
+                    this._sessionToken = new AutocompleteSessionToken();
+                }
+
+                const request = {
+                    input: input,
+                    sessionToken: this._sessionToken
+                };
+
+                if (this._map) {
+                    const center = this._map.getCenter();
+                    request.origin = { lat: center.lat(), lng: center.lng() };
+                }
+
+                const { suggestions } = await AutocompleteSuggestion.fetchAutocompleteSuggestions(request);
+
+                this._suggestions = suggestions;
+                this._showSuggestionsDropdown(suggestions);
+
+            } catch (error) {
+                console.error(`${this._logPrefix} Error fetching suggestions:`, error);
+            }
+        },
+
+        /**
+         * Sets up custom autocomplete functionality with keyboard navigation
+         * Debounces input, handles arrow keys, enter, and escape
+         * @private
+         */
+        _setupCustomAutocomplete: function () {
+            const typingDelay = 200;
+
+            const inputElement = this.searchTextbox.domNode.querySelector("input") || this.searchTextbox.domNode;
+
+            const keyupHandler = on(inputElement, "keyup", function (e) {
+                if (this._typingTimer) {
+                    clearTimeout(this._typingTimer);
+                }
+                
+                const value = e.target.value;
+
+                this._typingTimer = setTimeout(function () {
+                    this._fetchAutocompleteSuggestions(value);
+                }.bind(this), typingDelay);
+
+            }.bind(this));
+
+            const documentClickHandler = function (e) {
+                if (this.searchTextbox && this.searchTextbox.domNode && 
+                    !this.searchTextbox.domNode.contains(e.target) && 
+                    this._suggestionsDropdown && 
+                    !this._suggestionsDropdown.contains(e.target)) {
+                    this._hideSuggestionsDropdown();
+                }
+            }.bind(this);
+
+            document.addEventListener("click", documentClickHandler, true);
+
+            this.own(
+                keyupHandler,
+                {
+                    remove: function () {
+                        document.removeEventListener("click", documentClickHandler, true);
+                    }
+                }
+            );
+        },
+
+        // ==================== Coordinate & Map Management ====================
+
+        /**
+         * Updates the widget value with the given location
+         * Automatically converts between object and string formats
+         * @param {google.maps.LatLng} location - The location to set
+         * @private
          */
         _setCoordinatesValue: function (location) {
-
             if (!this._started) {
                 return;
             }
@@ -341,14 +652,13 @@ function (
 
             if (!location) {
                 if (this._isComplexType()) {
-                    // Set "empty" value (still an object for local block properties)
                     value = {
                         "latitude": null,
                         "longitude": null
                     };
                 }
             }
-            else { // Has a location
+            else {
                 const longitude = location.lng(),
                       latitude = location.lat();
 
@@ -357,7 +667,6 @@ function (
                     return;
                 }
 
-                // Get the new value in the correct format
                 if (this._isComplexType()) {
                     value = {
                         "latitude": parseFloat(latitude),
@@ -368,66 +677,55 @@ function (
                 }
             }
 
-            // Set the widget (i.e. property) value and trigger change event to notify the CMS (and possibly others) that the value has changed
             this.set("value", value);
         },
 
         /**
-         * Updates map location.
-         * @param {any} location
-         * @param {any} zoom Initial zoom level, a value between 1 and 20 (optional).
-         * @param {any} center Whether to center on the new map marker location (optional).
-         * @param {any} skipMarker Whether to skip adding a pin to the new map location (optional).
+         * Updates map marker position and/or map view
+         * @param {google.maps.LatLng} location - Target location
+         * @param {number} [zoom] - Optional zoom level (1-20)
+         * @param {boolean} [center] - Optional flag to center map on location
+         * @param {boolean} [skipMarker] - Optional flag to skip marker placement
+         * @private
          */
-        _setMapLocation: function (/* google.maps.LatLng */ location, zoom, center, skipMarker) {
-
+        _setMapLocation: function (location, zoom, center, skipMarker) {
             if (!this._map) {
                 return;
             }
 
-            // Set the marker's position and coordinate textboxes, unless marker is ignored (for example when setting to default coordiantes)
             if (!skipMarker) {
-
-                if (!this._marker) { // No marker yet, create one
-                    this._marker = new google.maps.Marker({
+                if (!this._marker) {
+                    this._marker = new google.maps.marker.AdvancedMarkerElement({
                         map: this._map
                     });
                 }
-
-                this._marker.setPosition(location);
+                this._marker.position = location;
             }
 
-            // Center on the location (optional)
             if (center) {
                 this._map.setCenter(location);
             }
 
-            // Set map zoom level (optional)
             if (zoom) {
                 this._map.setZoom(zoom);
             }
         },
 
         /**
-         * Sets map location and marker based on current value.
+         * Refreshes marker location based on current widget value
+         * Called on initial load and when value changes externally
+         * @private
          */
         _refreshMarkerLocation: function () {
-
             if (!this._map) {
-                // Map not initialized;
                 return;
             }
 
             let location;
 
-            // If the value set is empty then clear the coordinates
             if (!this._hasCoordinates()) {
-
-                // Set map location to default coordinates
                 location = new google.maps.LatLng(this.defaultCoordinates.latitude, this.defaultCoordinates.longitude);
-
                 this._setMapLocation(location, null, true, true);
-
                 return;
             }
 
@@ -436,7 +734,6 @@ function (
             if (this._isComplexType()) {
                 latitude = this.value.latitude;
                 longitude = this.value.longitude;
-
             } else {
                 const coordinates = this.value.split(",");
                 latitude = parseFloat(coordinates[0]);
@@ -444,35 +741,56 @@ function (
             }
 
             location = new google.maps.LatLng(latitude, longitude);
-
             this._setMapLocation(location, null, true, false);
         },
 
         /**
-         * Wires up event to initialize map object once script has loaded.
+         * Wires up event listener for when Google Maps script loads
+         * Initializes map and refreshes marker location
+         * @private
          */
         _wireupGoogleMapsScriptLoaded: function () {
             const signal = on(document, "googleMapsScriptLoaded", function (e) {
-
                 this._createGoogleMapsElement();
-
                 this._refreshMarkerLocation();
-
                 signal.remove();
-
             }.bind(this));
 
             this.own(signal);
         },
 
-        postCreate: function () {
+        // ==================== Lifecycle Methods ====================
+
+        /**
+         * Cleans up resources when widget is destroyed
+         * Clears timers, removes DOM elements, and resets references
+         */
+        destroy: function () {
+            if (this._typingTimer) {
+                clearTimeout(this._typingTimer);
+                this._typingTimer = null;
+            }
+
+            if (this._suggestionsDropdown) {
+                domConstruct.destroy(this._suggestionsDropdown);
+                this._suggestionsDropdown = null;
+            }
+
+            this._sessionToken = null;
+            this._suggestions = null;
+            this._placesLibrary = null;
 
             this.inherited(arguments);
+        },
 
+        /**
+         * Called after widget creation
+         * Wires up icons, loads Google Maps script, and sets up event handlers
+         */
+        postCreate: function () {
+            this.inherited(arguments);
             this._wireupIcons();
-
             this._wireupGoogleMapsScriptLoaded();
-
             this._addGoogleMapsScript();
         },
     });  

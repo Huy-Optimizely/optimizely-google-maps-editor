@@ -39,9 +39,10 @@ public class Startup
             .Configure<RazorPagesOptions>(x => x.RootDirectory = "/");
 
         // Enable the Google Maps Editor add-on if an API key has been specified
-        if (_configuration["GoogleMaps:ApiKey"] is string apiKey && !string.IsNullOrWhiteSpace(apiKey))
+        if (_configuration["GoogleMaps:ApiKey"] is string apiKey && !string.IsNullOrWhiteSpace(apiKey) 
+            && _configuration["GoogleMaps:MapId"] is string mapId && !string.IsNullOrWhiteSpace(mapId))
         {
-            services.AddGoogleMapsEditor(apiKey);
+            services.AddGoogleMapsEditor(apiKey, mapId);
 
             if (_webHostEnvironment.IsDevelopment())
             {
