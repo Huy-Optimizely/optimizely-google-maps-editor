@@ -14,6 +14,7 @@ public static class ServiceCollectionExtensions
     /// Gets or sets the API key to use for Google Maps.
     /// </summary>
     public static string ApiKey { get; set; }
+    
     /// <summary>
     /// Gets or sets the Map Id to use for Google Maps.
     /// </summary>
